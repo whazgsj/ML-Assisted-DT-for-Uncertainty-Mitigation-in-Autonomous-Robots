@@ -17,7 +17,7 @@ This project builds a **navigation anomaly detection system** for TurtleBot3, ba
   - **0 = Normal**  
   - **1 = Stuck (High Friction / Low Surface Density)**  
   - **2 = Sliding on Steep Descent**  
-  - **3 = Unlabeled (ignored during training)**  
+  - **3 = Unlabeled (on test dataset)**  
 
 We train **four classical ML classifiers**:
 
