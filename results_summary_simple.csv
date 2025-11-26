@@ -1,0 +1,9 @@
+Model,ValInferTime_sec_per_sample,ValAccuracy,MemUsage_MB_per_sample
+Logistic Regression,2.79e-06 s,0.8407,0.248 MB
+Random Forest,2.90e-05 s,1.0000,0.287 MB
+SVM + PCA,4.47e-05 s,0.9943,0.270 MB
+XGBoost,3.14e-06 s,0.9986,0.277 MB
+Logistic Regression,3.16e-06 s,0.8407,0.262 MB
+Random Forest,3.03e-05 s,1.0000,0.270 MB
+Logistic Regression,3.95e-06 s,0.8407,0.256 MB
+XGBoost,3.07e-06 s,0.9986,0.266 MB

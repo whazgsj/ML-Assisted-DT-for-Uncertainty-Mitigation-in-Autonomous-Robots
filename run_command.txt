@@ -1,0 +1,21 @@
+# Logistic Regression
+python train_baseline_logreg.py \
+  --csv "./turtlebot3_navigation_dataset_10000_with_actual_velocity_labelled.csv" \
+  --out_dir "./artifacts_logreg"
+
+# Random Forest
+python train_rf_speed.py \
+  --csv "./turtlebot3_navigation_dataset_10000_with_actual_velocity_labelled.csv" \
+  --out_dir "./artifacts_rf_speed"
+
+# SVM + PCA
+python train_svm_pca.py \
+  --csv "./turtlebot3_navigation_dataset_10000_with_actual_velocity_labelled.csv" \
+  --out_dir "./artifacts_svm" \
+  --pca_dim 14
+
+# XGBoost
+python train_xgboost.py \
+  --csv "./turtlebot3_navigation_dataset_10000_with_actual_velocity_labelled.csv" \
+  --out_dir "./artifacts_xgb"
+
