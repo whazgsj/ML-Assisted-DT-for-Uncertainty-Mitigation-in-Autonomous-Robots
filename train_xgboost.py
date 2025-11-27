@@ -33,7 +33,7 @@ def detect_columns(df):
 
 def build_features(df, cols):
     """
-    Basic feature engineering from lidar + velocities
+    Basic feature engineering from LiDAR + velocity inputs
     """
     feats = {}
     lidar = df[cols["lidar_cols"]].to_numpy()
@@ -53,14 +53,19 @@ def build_features(df, cols):
         feats[f"sec{i:02d}_min"] = sector.min(axis=1)
         feats[f"sec{i:02d}_std"] = sector.std(axis=1)
 
-    # velocity based
+    # velocity-based features
     for key in ["linear_velocity", "angular_velocity", "actual_velocity"]:
         if cols[key]:
             feats[key] = df[cols[key]]
 
     feats["ang_over_lin"] = df[cols["angular_velocity"]] / (df[cols["linear_velocity"]] + 1e-3)
+
     X = pd.DataFrame(feats)
-    meta = {"n_sectors": n_sectors, "lidar_cols": cols["lidar_cols"], "feature_names": list(X.columns)}
+    meta = {
+        "n_sectors": n_sectors,
+        "lidar_cols": cols["lidar_cols"],
+        "feature_names": list(X.columns)
+    }
     return X, meta
 
 
@@ -79,29 +84,30 @@ def main():
     if cols["label"] is None:
         raise ValueError("Cannot find label/status column in CSV")
 
-    # unify unknown labels
+    # Unify unknown labels: convert -1 → 3
     df.loc[df[cols["label"]] == -1, cols["label"]] = 3
 
-    # take only labeled subset (0,1,2)
+    # Only use labeled subset (0, 1, 2)
     df_trainable = df.iloc[:7000].copy()
     df_trainable = df_trainable[df_trainable[cols["label"]].isin([0, 1, 2])].copy()
 
     # features
     X_all, meta = build_features(df_trainable, cols)
 
-    # --- remove leaky features if present ---
+    # --- remove leaky features if they exist ---
     for bad in ["v_diff", "v_diff_abs"]:
         if bad in X_all.columns:
             X_all.drop(columns=[bad], inplace=True)
 
-    # --- add new non-leaky velocity-based features ---
-    # 状态	描述	实际与指令速度关系	ratio/log_ratio 特征	absdiff 特征
-    # 0 正常行驶	电机推动车体，地面正常	actual ≈ linear	ratio ≈ 1，log ≈ 0	absdiff 小
-    # 1 卡住（低摩擦/打滑原地转）	电机在转，但车不动	actual ≪ linear	ratio < 1，log < 0	absdiff 大
-    # 2 下滑（陡坡）	电机没推，但车被动滑动	actual ≫ linear	ratio > 1，log > 0	absdiff 大
+    # --- Add new non-leaky velocity-based features ---
+    # State | Description | actual vs commanded speed | ratio/log_ratio | absdiff
+    # 0 Normal driving | Motor moves robot normally | actual ≈ linear | ratio ≈ 1, log ≈ 0 | absdiff small
+    # 1 Stuck (low friction / spinning in place) | Motor spins but robot doesn't move | actual ≪ linear | ratio < 1, log < 0 | absdiff large
+    # 2 Sliding downhill | Robot sliding due to gravity | actual ≫ linear | ratio > 1, log > 0 | absdiff large
+    #
+    # log_ratio sign tells you stuck (<0) or sliding (>0)
+    # absdiff magnitude tells you whether anomaly is significant
 
-    # ratio 的正负方向（log_ratio）告诉你是卡住还是滑动；
-    # absdiff 的大小告诉你“是不是异常”。
     eps = 1e-3
     lin_col = cols["linear_velocity"]
     act_col = cols["actual_velocity"]
@@ -113,7 +119,7 @@ def main():
 
     y_all = df_trainable[cols["label"]].astype(int).values
 
-    # split
+    # train/validation split
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_all, y_all, test_size=0.2, random_state=args.seed, stratify=y_all
     )
@@ -124,7 +130,7 @@ def main():
     weight_dict = {int(c): float(w) for c, w in zip(classes, cw)}
     sample_weight_tr = np.array([weight_dict[int(c)] for c in y_tr])
 
-    # model
+    # model definition
     model = XGBClassifier(
         n_estimators=400,
         max_depth=6,
@@ -137,13 +143,18 @@ def main():
         random_state=args.seed
     )
 
-    # === 🕒 训练计时 ===
+    # === Training time ===
     t0 = time.time()
-    model.fit(X_tr, y_tr, sample_weight=sample_weight_tr, eval_set=[(X_val, y_val)], verbose=False)
+    model.fit(
+        X_tr, y_tr,
+        sample_weight=sample_weight_tr,
+        eval_set=[(X_val, y_val)],
+        verbose=False
+    )
     train_time = time.time() - t0
     print(f"\nTraining time: {train_time:.3f} seconds")
 
-    # === ⏱ 验证推理计时 ===
+    # === Validation inference time ===
     t1 = time.time()
     y_pred = model.predict(X_val)
     val_time = time.time() - t1
@@ -162,7 +173,7 @@ def main():
     print("\nClassification report:")
     print(classification_report(y_val, y_pred, digits=4))
 
-    # save model
+    # save model + metadata
     joblib.dump(model, out_dir / "xgb_model.joblib")
     with open(out_dir / "feature_meta.json", "w") as f:
         meta["timing"] = {"train_sec": train_time, "val_sec_per_sample": avg_val_time}
@@ -177,7 +188,7 @@ def main():
     for rank, i in enumerate(sorted_idx, 1):
         print(f"{rank:2d}. {X_all.columns[i]:24s} {importance[i]:.5f}")
 
-    # === ⚡ 测试集推理计时 ===
+    # === Test inference time ===
     df_test = df.iloc[7000:].copy()
     X_test, _ = build_features(df_test, cols)
     X_test["speed_ratio"] = (df_test[act_col] + eps) / (df_test[lin_col] + eps)
@@ -199,9 +210,9 @@ def main():
         "p2": proba[:, 2],
     })
     out_pred.to_csv(out_dir / "test_predictions.csv", index=False)
-    print(f"\nSaved test predictions to: {out_dir / 'test_predictions.csv'}\n")
+    print(f"\nSaved test predictions to: {out_pred}\n")
 
-    # distribution
+    # distribution of predictions
     print("================= TEST (last 3000, unlabeled) =================")
     vals, cnts = np.unique(pred, return_counts=True)
     total = cnts.sum()
@@ -217,19 +228,19 @@ def main():
     model_name = "XGBoost"
 
     results = {
-        "Model": model_name,  
-        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",  # 科学计数法，保留 2 位
-        "ValAccuracy": f"{val_acc:.4f}",  # 小数点后 4 位
-        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",  # 小数点后 3 位
+        "Model": model_name,
+        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",
+        "ValAccuracy": f"{val_acc:.4f}",
+        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",
     }
 
-    # ==== 打印简洁结果 ====
+    # ==== Print concise summary ====
     print("\n===== EXECUTION SUMMARY (Simplified) =====")
     for k, v in results.items():
         print(f"{k:30s}: {v}")
     print("==========================================")
 
-    # 保存汇总结果
+    # save summary file
     import csv
     summary_file = "results_summary_simple.csv"
     with open(summary_file, "a", newline="") as f:
