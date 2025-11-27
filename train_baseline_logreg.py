@@ -1,4 +1,3 @@
-
 import argparse
 import json
 import numpy as np
@@ -50,7 +49,7 @@ def detect_columns(df):
         "actual_velocity": actual_col,
     }
 
-# 对每个扇区做 mean/min/std, 得到 18*3=54 个“空间分布”特征
+# Compute mean/min/std for each sector to obtain 18×3 = 54 spatial-distribution features
 def make_sector_indices(n_points=360, n_sectors=18):
     per = n_points // n_sectors
     sectors = []
@@ -72,7 +71,7 @@ def build_features(df, cols):
 
     lidar = df[lidar_cols].values.astype(float)
 
-    # Global stats
+    # Global statistics
     global_min = np.min(lidar, axis=1)
     global_max = np.max(lidar, axis=1)
     global_mean = np.mean(lidar, axis=1)
@@ -83,7 +82,7 @@ def build_features(df, cols):
     q75 = np.quantile(lidar, 0.75, axis=1)
     q90 = np.quantile(lidar, 0.90, axis=1)
 
-    # Heuristic windows(方向窗口)
+    # Heuristic windows
     def idx_range(start, end):
         if start <= end:
             return list(range(start, end+1))
@@ -98,11 +97,11 @@ def build_features(df, cols):
     left_min  = np.min(lidar[:, left_idx], axis=1)
     right_min = np.min(lidar[:, right_idx], axis=1)
 
-    # 方向派生特征（不对称与前方相对危险度）
+    # Direction-derived features (asymmetry and relative front-facing hazard level)
     lr_asym_min = left_min - right_min
     front_vs_mean = front_min - global_mean
 
-    # 统计每帧里，比阈值还近的雷达点有多少
+    # Count how many LiDAR points in each frame fall below the given distance thresholds
     thr_02 = np.sum(lidar < 0.2, axis=1)
     thr_03 = np.sum(lidar < 0.3, axis=1)
     thr_05 = np.sum(lidar < 0.5, axis=1)
@@ -154,44 +153,47 @@ def main():
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
 
-    # 解析命令行参数
+    # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", type=str, required=True, help="Path to dataset CSV")
     parser.add_argument("--out_dir", type=str, default="artifacts_logreg")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
-    # 创建输出目录
+    # Create output directory
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 读 CSV + 自动识别关键列
+    # Load CSV and automatically detect key columns
     df = pd.read_csv(args.csv)
     cols = detect_columns(df)
 
     if cols["label"] is None:
         raise ValueError("Cannot find 'status' column.")
-    # normalize labels: -1 -> 3 (unknown)
+
+    # Normalize labels: -1 -> 3 (unknown)
     df.loc[df[cols["label"]] == -1, cols["label"]] = 3
 
-    # supervised train on first 7000 with labels in {0,1,2}
+    # Use first 7000 rows with labels in {0,1,2} for supervised training
     df_trainable = df.iloc[:7000].copy()
     df_trainable = df_trainable[df_trainable[cols["label"]].isin([0,1,2])].copy()
-    # 特征工程
+
+    # Feature engineering
     X_all, meta = build_features(df_trainable, cols)
     y_all = df_trainable[cols["label"]].astype(int).values
 
-    # 训练/验证划分（分层
+    # Train/validation split (stratified)
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_all, y_all, test_size=0.2, random_state=args.seed, stratify=y_all
     )
 
-    # 记录与复现：以后你换模型（比如 XGBoost/SVM/RandomForest）时，可以用同样的权重作为 sample_weight，保证对比公平
+    # For reproducibility: if switching models later (e.g., XGBoost/SVM/RandomForest),
+    # these class weights can be reused for consistent comparison
     classes = np.unique(y_all)
     cw = compute_class_weight(class_weight="balanced", classes=classes, y=y_all)
     class_weight_dict = {int(c): float(w) for c, w in zip(classes, cw)}
 
-    # 建立训练管线：标准化 + 多项逻辑回归
+    # Build training pipeline: Standardization + Multinomial Logistic Regression
     pipe = Pipeline([
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
@@ -208,18 +210,16 @@ def main():
     train_time = time.time() - t0
     print(f"\nTraining time: {train_time:.3f} seconds")
 
-    # 混淆矩阵是一张表，表示模型在每个真实类别上预测对了多少、错了多少
-    # 指标	               含义	                          计算方式	              通俗解释
-    # precision（精确率）	预测为该类的样本中有多少是真的	   TP / (TP + FP)	     “我说是类1的，有多少真的是类1？”
-    # recall（召回率）	    实际属于该类的样本中有多少被找出来	TP / (TP + FN)	      “所有类1样本中我找出了多少？”
-    # f1-score（F1分数）    精确率和召回率的调和平均	      2 × P × R / (P + R)	“兼顾精确和召回的平衡指标”
-    # support	          每个类别在验证集中的样本数	     —	                   用于参考，样本多少
-    # accuracy（准确率）	全部预测正确的比例	             (TP总和) / 总样本	      整体正确率
-    # macro avg	          各类别指标的简单平均	            —	                  各类一视同仁，适合不均衡任务
-    # weighted avg	      各类指标按样本数加权平均	         —	                   多数类影响更大
-    # ===============================
-    # 验证集推理 + 计时
-    # ===============================
+    # Confusion matrix explanation:
+    # precision: among predicted class X samples, how many are correct
+    # recall: among true class X samples, how many are found
+    # f1-score: harmonic mean of precision and recall
+    # support: number of samples per class
+    # accuracy: overall correctness ratio
+    # macro avg: unweighted average across classes
+    # weighted avg: weighted average by class sample count
+
+    # Validation inference + timing
     t1 = time.time()
     y_pred = pipe.predict(X_val)
     val_time = time.time() - t1
@@ -231,9 +231,7 @@ def main():
     print("\nClassification report (val):")
     print(classification_report(y_val, y_pred, digits=4))
 
-    # ===============================
-    # 保存模型与元数据
-    # ===============================
+    # Save model and metadata
     model_path = out_dir / "logreg_pipeline.joblib"
     joblib.dump(pipe, model_path)
 
@@ -252,9 +250,7 @@ def main():
     print(f"\nSaved model to: {model_path}")
     print(f"Saved feature meta to: {out_dir/'feature_meta.json'}")
 
-    # ===============================
-    # 测试集预测 + 计时
-    # ===============================
+    # Test inference + timing
     df_test = df.iloc[7000:].copy()
     X_test_all, _ = build_features(df_test, cols)
 
@@ -273,33 +269,33 @@ def main():
     out_pred.to_csv(out_dir / "test_predictions.csv", index=False)
     print(f"\nSaved test predictions to: {out_dir/'test_predictions.csv'}")
 
-    # 打印测试集类别分布
+    # Print distribution of predicted classes in the test set
     vals, cnts = np.unique(pred, return_counts=True)
     print("\n================= TEST (last 3000, unlabeled) =================")
     for v, c in zip(vals, cnts):
         print(f"class {v}: {c:4d} ({100 * c / len(pred):6.2f}%)")
     print("===============================================================")
-    # ===== Execution Summary (simplified) =====
+
+    # Execution summary (simplified)
     process = psutil.Process()
     mem_usage = process.memory_info().rss / (1024 ** 2)  # MB
-    mem_per_sample = mem_usage / len(y_val)
     val_acc = accuracy_score(y_val, y_pred)
     model_name = "Logistic Regression"
 
     results = {
         "Model": model_name,
-        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",  # 科学计数法，保留 2 位
-        "ValAccuracy": f"{val_acc:.4f}",  # 小数点后 4 位
-        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",  # 小数点后 3 位
-}
+        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",
+        "ValAccuracy": f"{val_acc:.4f}",
+        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",
+    }
 
-    # ==== 打印简洁结果 ====
+    # Print summary
     print("\n===== EXECUTION SUMMARY (Simplified) =====")
     for k, v in results.items():
         print(f"{k:30s}: {v}")
     print("==========================================")
 
-    # 保存汇总结果
+    # Save summary CSV
     import csv
     summary_file = "results_summary_simple.csv"
     with open(summary_file, "a", newline="") as f:
