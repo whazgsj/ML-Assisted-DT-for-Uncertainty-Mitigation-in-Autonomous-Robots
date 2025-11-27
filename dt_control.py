@@ -39,11 +39,11 @@ def handle_state_1_stuck(row):
     eps = 1e-3
     speed_ratio = av / (abs(lv) + eps)
 
-    # 强力减速（25%），但保持最少速度 0.03 m/s 用于“爬行”
+    # Apply strong deceleration (25%), but keep a minimum speed of 0.03 m/s for “crawling”
     base = max(abs(lv) * 0.25, 0.03)
     new_lv = math.copysign(base, lv if lv != 0 else 1)
 
-    # 角速度减半，减少左右轮速差，避免原地打滑
+    # Reduce angular velocity by 50% to minimize wheel-speed difference and avoid spinning in place
     new_ang = ang * 0.5
 
     print("\n[STATE 1 - STUCK / HIGH FRICTION DETECTED]")
@@ -66,7 +66,7 @@ def handle_state_2_sliding(row):
     eps = 1e-3
     speed_ratio = av / (abs(lv) + eps)
 
-    # 下坡滑动：立刻让速度=0（刹车），角速度=0（减少左右轮不一致）
+    # Sliding downhill: immediately set linear velocity to 0 (brake) and angular velocity to 0 (reduce wheel mismatch)
     new_lv = 0.0
     new_ang = 0.0
 
