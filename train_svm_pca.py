@@ -14,7 +14,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 import time
 
 
-# ====================== 自动识别关键列 ======================
+# ====================== Automatically detect key columns ======================
 def detect_columns(df):
     cols = {}
     for c in df.columns:
@@ -31,7 +31,7 @@ def detect_columns(df):
     return cols
 
 
-# ====================== 特征构造函数 ======================
+# ====================== Feature construction function ======================
 def build_features(df, cols):
     lidar = df[cols["lidar_cols"]].values
     global_min = np.min(lidar, axis=1)
@@ -78,7 +78,7 @@ def build_features(df, cols):
     return X, meta
 
 
-# ====================== 主函数 ======================
+# ====================== Main function ======================
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True)
@@ -90,59 +90,60 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ==== 1. 读取数据 ====
+    # ==== 1. Load data ====
     df = pd.read_csv(args.csv)
     cols = detect_columns(df)
     df_trainable = df.iloc[:7000].copy()
     df_trainable = df_trainable[df_trainable[cols["label"]].isin([0, 1, 2])].copy()
 
-    # ==== 2. 构造特征 ====
+    # ==== 2. Build features ====
     X_all, meta = build_features(df_trainable, cols)
     y_all = df_trainable[cols["label"]].astype(int).values
 
-    # ==== 3. 划分训练/验证 ====
+    # ==== 3. Train/validation split ====
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_all, y_all, test_size=0.2, random_state=args.seed, stratify=y_all
     )
 
-    # ==== 4. 类别权重 ====
+    # ==== 4. Class weights ====
     classes = np.unique(y_all)
     cw = compute_class_weight("balanced", classes=classes, y=y_all)
     weight_dict = {int(c): float(w) for c, w in zip(classes, cw)}
     sample_weight_tr = np.array([weight_dict[int(c)] for c in y_tr])
 
-    # ==== 5. 动态 PCA 维度 ====
+    # ==== 5. Dynamic PCA dimension ====
     n_feats = X_tr.shape[1]
     pca_dim_eff = min(args.pca_dim, n_feats - 1)
     if pca_dim_eff < 1:
         pca_dim_eff = n_feats
     print(f"[INFO] n_features={n_feats}, using pca_dim={pca_dim_eff}")
 
-    # ==== 6. 管线 ====
-    # 径向基核 Radial Basis Function 把原始特征映射到一个高维空间，在那个空间中数据可能线性可分
+    # ==== 6. Pipeline ====
+    # Radial Basis Function kernel maps original features into a high-dimensional space 
+    # where the data may become linearly separable.
     pipe = Pipeline([
         ("scaler", StandardScaler()),
         ("pca", PCA(n_components=pca_dim_eff, random_state=args.seed)),
         ("svm", SVC(kernel="rbf", probability=True, class_weight=None))
     ])
 
-    # ==== 7. 网格搜索 ====
+    # ==== 7. Grid search ====
     param_grid = {
         "svm__C": [0.5, 1.0, 2.0, 5.0, 10.0],
         "svm__gamma": ["scale", 0.5, 0.2, 0.1, 0.05, 0.02]
     }
-    # 3折交叉验证：每组参数在训练集被切成3份轮流验证，取平均分
+    # 3-fold cross-validation: each parameter set is evaluated across 3 splits
     gs = GridSearchCV(
         pipe, param_grid, scoring="f1_macro", n_jobs=-1, cv=3, verbose=1, error_score="raise"
     )
 
-    # ==== 8. 训练（计时开始） ====
+    # ==== 8. Training (timed) ====
     t0 = time.time()
     gs.fit(X_tr, y_tr, svm__sample_weight=sample_weight_tr)
     train_time = time.time() - t0
     print(f"\nTraining time: {train_time:.3f} seconds")
 
-    # ==== 9. 验证集结果（计时） ====
+    # ==== 9. Validation results (timed) ====
     t1 = time.time()
     y_pred = gs.predict(X_val)
     val_time = time.time() - t1
@@ -155,7 +156,7 @@ def main():
     print("\nClassification report (val):")
     print(classification_report(y_val, y_pred, digits=4))
 
-    # ==== 10. 保存模型 ====
+    # ==== 10. Save model ====
     joblib.dump(gs.best_estimator_, out_dir / "svm_pca_speed.joblib")
     meta["columns"] = cols
     meta["class_weight"] = weight_dict
@@ -165,7 +166,7 @@ def main():
         json.dump(meta, f, indent=2)
     print(f"\nSaved model to: {out_dir/'svm_pca_speed.joblib'}")
 
-    # ==== 11. 对后3000样本预测（计时） ====
+    # ==== 11. Predict on last 3000 samples (timed) ====
     df_test = df.iloc[7000:].copy()
     X_test, _ = build_features(df_test, cols)
 
@@ -200,19 +201,19 @@ def main():
     model_name = "SVM + PCA"
 
     results = {
-        "Model": model_name, 
-        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",  # 科学计数法，保留 2 位
-        "ValAccuracy": f"{val_acc:.4f}",  # 小数点后 4 位
-        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",  # 小数点后 3 位
+        "Model": model_name,
+        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",
+        "ValAccuracy": f"{val_acc:.4f}",
+        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",
     }
 
-    # ==== 打印简洁结果 ====
+    # ==== Print concise summary ====
     print("\n===== EXECUTION SUMMARY (Simplified) =====")
     for k, v in results.items():
         print(f"{k:30s}: {v}")
     print("==========================================")
 
-    # 保存汇总结果
+    # Save summary
     import csv
     summary_file = "results_summary_simple.csv"
     with open(summary_file, "a", newline="") as f:
