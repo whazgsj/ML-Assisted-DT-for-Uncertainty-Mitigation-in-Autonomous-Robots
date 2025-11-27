@@ -11,7 +11,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 from sklearn.ensemble import RandomForestClassifier
 
 
-# ============== 列自动检测 ==============
+# ============== Automatic column detection ==============
 def detect_columns(df: pd.DataFrame):
     cols = {}
     for c in df.columns:
@@ -34,7 +34,7 @@ def detect_columns(df: pd.DataFrame):
     return cols
 
 
-# ============== 特征工程 ==============
+# ============== Feature engineering ==============
 def build_features(df: pd.DataFrame, cols: dict):
     lidar = df[cols["lidar_cols"]].to_numpy(dtype=np.float32)
     global_min = lidar.min(axis=1)
@@ -109,7 +109,7 @@ def build_features(df: pd.DataFrame, cols: dict):
     return X, meta
 
 
-# ============== 主流程 ==============
+# ============== Main pipeline ==============
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True)
@@ -127,27 +127,27 @@ def main():
     df = pd.read_csv(args.csv)
     cols = detect_columns(df)
 
-    # 前 7000 行有标签；仅取 0/1/2
+    # First 7000 rows have labels; only use labels {0,1,2}
     df_trainable = df.iloc[:7000].copy()
     df_trainable = df_trainable[df_trainable[cols["label"]].isin([0, 1, 2])].copy()
 
-    # 特征 + 标签
+    # Features + labels
     X_all, meta = build_features(df_trainable, cols)
     y_all = df_trainable[cols["label"]].astype(int).values
 
-    # ==== 🕒 时间顺序切分 ====
+    # ==== Time-based split ====
     split_idx = int(len(X_all) * 0.8)
     X_tr, X_val = X_all.iloc[:split_idx], X_all.iloc[split_idx:]
     y_tr, y_val = y_all[:split_idx], y_all[split_idx:]
     print(f"[INFO] Time-based split: train={len(X_tr)}, val={len(X_val)}")
 
-    # 类别权重
+    # Class weights
     classes = np.unique(y_all)
     cw = compute_class_weight("balanced", classes=classes, y=y_all)
     weight_map = {int(c): float(w) for c, w in zip(classes, cw)}
     sample_weight_tr = np.array([weight_map[int(c)] for c in y_tr], dtype=np.float32)
 
-    # RF 模型
+    # Random Forest model
     rf = RandomForestClassifier(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
@@ -159,27 +159,27 @@ def main():
         oob_score=False,
     )
 
-    # ========== ⏱ 训练计时 ==========
+    # ========== Training time ==========
     t0 = time.time()
     rf.fit(X_tr, y_tr, sample_weight=sample_weight_tr)
     train_time = time.time() - t0
     print(f"\nTraining time: {train_time:.3f} seconds")
 
-    # ========== ⏱ 验证推理计时 ==========
+    # ========== Validation inference time ==========
     t1 = time.time()
     y_pred = rf.predict(X_val)
     val_time = time.time() - t1
     avg_val_time = val_time / len(X_val)
     print(f"Validation inference time: {val_time:.3f} sec total, {avg_val_time:.6f} sec/sample")
 
-    # 验证结果
+    # Validation results
     print("\n================= VALIDATION (time split) =================")
     print("Confusion matrix (labels 0,1,2):")
     print(confusion_matrix(y_val, y_pred, labels=[0, 1, 2]))
     print("\nClassification report:")
     print(classification_report(y_val, y_pred, digits=4))
 
-    # 保存模型与元数据
+    # Save model and metadata
     joblib.dump(rf, out_dir / "rf_speed_timesplit.joblib")
     meta_out = {
         "columns": cols,
@@ -199,18 +199,18 @@ def main():
         json.dump(meta_out, f, indent=2)
     print(f"\nSaved model to: {out_dir/'rf_speed_timesplit.joblib'}")
 
-    # 特征重要性
+    # Top-20 feature importance
     importances = rf.feature_importances_
     idx = np.argsort(importances)[::-1][:20]
     print("\nTop-20 feature importance:")
     for rank, i in enumerate(idx, 1):
         print(f"{rank:2d}. {X_all.columns[i]:24s} {importances[i]:.5f}")
 
-    # 无标签后 3000 样本推断
+    # Inference on last 3000 unlabeled samples
     df_test = df.iloc[7000:].copy()
     X_test, _ = build_features(df_test, cols)
 
-    # ========== ⏱ 测试推理计时 ==========
+    # ========== Test inference time ==========
     t2 = time.time()
     proba = rf.predict_proba(X_test)
     pred = rf.predict(X_test)
@@ -243,19 +243,19 @@ def main():
     model_name = "Random Forest"
 
     results = {
-        "Model": model_name, 
-        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",  # 科学计数法，保留 2 位
-        "ValAccuracy": f"{val_acc:.4f}",  # 小数点后 4 位
-        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",  # 小数点后 3 位
+        "Model": model_name,
+        "ValInferTime_sec_per_sample": f"{avg_val_time * 1:.2e} s",
+        "ValAccuracy": f"{val_acc:.4f}",
+        "MemUsage_MB_per_sample": f"{(mem_usage / len(y_val)):.3f} MB",
     }
 
-    # ==== 打印简洁结果 ====
+    # ==== Print concise summary ====
     print("\n===== EXECUTION SUMMARY (Simplified) =====")
     for k, v in results.items():
         print(f"{k:30s}: {v}")
     print("==========================================")
 
-    # 保存汇总结果
+    # Save summary
     import csv
     summary_file = "results_summary_simple.csv"
     with open(summary_file, "a", newline="") as f:
